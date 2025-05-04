@@ -273,30 +273,6 @@ def load_stats():
 load_history()
 load_stats()
 
-# def get_supported_languages():
-#     try:
-#         response = requests.get('http://localhost:5000/languages')
-#         if response.status_code == 200:
-#             return response.json()
-#     except:
-#         pass
-#     return {
-#         'en': 'Английский',
-#         'ru': 'Русский',
-#         'de': 'Немецкий',
-#         'fr': 'Французский',
-#         'es': 'Испанский',
-#         'it': 'Итальянский',
-#         'pt': 'Португальский',
-#         'nl': 'Нидерландский',
-#         'pl': 'Польский',
-#         'uk': 'Украинский',
-#         'ja': 'Японский',
-#         'ko': 'Корейский',
-#         'zh': 'Китайский',
-#         'ar': 'Арабский'
-#     }
-
 # Стилизация
 st.markdown("""
     <style>
