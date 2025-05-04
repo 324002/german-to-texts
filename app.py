@@ -153,6 +153,7 @@ def process_single_image(image_data: bytes, settings: Dict) -> Dict:
             return {'error': 'Файл слишком большой'}
         
         files = {'image': optimized_image}
+        
         def recognize_text(image):
             text = pytesseract.image_to_string(image, lang='deu')
             return {"text": text}
