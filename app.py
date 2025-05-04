@@ -156,6 +156,7 @@ def process_single_image(image_data: bytes, settings: Dict) -> Dict:
         
         def recognize_text(image):
             text = pytesseract.image_to_string(image, lang='deu')
+            response = recognize_text(uploaded_image)
             return {"text": text}
         
         # if response.status_code == 200:
