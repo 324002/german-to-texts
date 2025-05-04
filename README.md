@@ -2,8 +2,6 @@
 Web-приложение для распознавания текста на немецком языке с изображения. 
 Используются библиотеки:
  - [Streamlit](https://streamlit.io/)
- - [Flask](https://github.com/pallets/flask)
- - [Flask-CORS](https://github.com/corydolphin/flask-cors)
  - [Requests](https://github.com/psf/requests)
  - [Python-dotenv](https://github.com/theskumar/python-dotenv)
  - [Pandas](https://github.com/pandas-dev/pandas)
