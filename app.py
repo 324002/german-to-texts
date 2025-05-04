@@ -17,6 +17,7 @@ from pathlib import Path
 import hashlib
 from functools import lru_cache
 import shutil
+import pytesseract
 
 # Константы
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -152,17 +153,19 @@ def process_single_image(image_data: bytes, settings: Dict) -> Dict:
             return {'error': 'Файл слишком большой'}
         
         files = {'image': optimized_image}
-        response = requests.post('http://localhost:5000/recognize', files=files, data=settings)
+        def recognize_text(image):
+            text = pytesseract.image_to_string(image, lang='deu')
+            return {"text": text}
         
-        if response.status_code == 200:
-            result = response.json()
-            # Сохраняем в кэш
-            save_to_cache(image_data, result)
-            update_stats(True, len(image_data))
-            return result
-        else:
-            update_stats(False, len(image_data))
-            return {'error': f'Ошибка сервера: {response.json().get("error", "Неизвестная ошибка")}'}
+        # if response.status_code == 200:
+        #     result = response.json()
+        #     # Сохраняем в кэш
+        #     save_to_cache(image_data, result)
+        #     update_stats(True, len(image_data))
+        #     return result
+        # else:
+        #     update_stats(False, len(image_data))
+        #     return {'error': f'Ошибка сервера: {response.json().get("error", "Неизвестная ошибка")}'}
     except Exception as e:
         update_stats(False, len(image_data))
         return {'error': str(e)}
@@ -268,29 +271,29 @@ def load_stats():
 load_history()
 load_stats()
 
-def get_supported_languages():
-    try:
-        response = requests.get('http://localhost:5000/languages')
-        if response.status_code == 200:
-            return response.json()
-    except:
-        pass
-    return {
-        'en': 'Английский',
-        'ru': 'Русский',
-        'de': 'Немецкий',
-        'fr': 'Французский',
-        'es': 'Испанский',
-        'it': 'Итальянский',
-        'pt': 'Португальский',
-        'nl': 'Нидерландский',
-        'pl': 'Польский',
-        'uk': 'Украинский',
-        'ja': 'Японский',
-        'ko': 'Корейский',
-        'zh': 'Китайский',
-        'ar': 'Арабский'
-    }
+# def get_supported_languages():
+#     try:
+#         response = requests.get('http://localhost:5000/languages')
+#         if response.status_code == 200:
+#             return response.json()
+#     except:
+#         pass
+#     return {
+#         'en': 'Английский',
+#         'ru': 'Русский',
+#         'de': 'Немецкий',
+#         'fr': 'Французский',
+#         'es': 'Испанский',
+#         'it': 'Итальянский',
+#         'pt': 'Португальский',
+#         'nl': 'Нидерландский',
+#         'pl': 'Польский',
+#         'uk': 'Украинский',
+#         'ja': 'Японский',
+#         'ko': 'Корейский',
+#         'zh': 'Китайский',
+#         'ar': 'Арабский'
+#     }
 
 # Стилизация
 st.markdown("""
