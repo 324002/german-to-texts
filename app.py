@@ -154,10 +154,12 @@ def process_single_image(image_data: bytes, settings: Dict) -> Dict:
         
         files = {'image': optimized_image}
         
-        def recognize_text(image):
-            text = pytesseract.image_to_string(image, lang='deu')
-            response = recognize_text(uploaded_image)
-            return {"text": text}
+        img = Image.open(io.BytesIO(optimized_image))
+        text = pytesseract.image_to_string(img, lang='deu')
+        result = {"text": text}
+        save_to_cache(image_data, result)
+        update_stats(True, len(image_data))
+        return result
         
         # if response.status_code == 200:
         #     result = response.json()
