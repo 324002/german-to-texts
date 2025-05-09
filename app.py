@@ -167,7 +167,7 @@ def process_single_image(image_data: bytes, settings: Dict) -> Dict:
         files = {'image': optimized_image}
         
         img = Image.open(io.BytesIO(optimized_image))
-        text = ocr_space_image(img, lang='deu')
+        text = ocr_space_image(optimized_image, language='deu')
         result = {"text": text}
         save_to_cache(image_data, result)
         update_stats(True, len(image_data))
