@@ -17,8 +17,20 @@ from pathlib import Path
 import hashlib
 from functools import lru_cache
 import shutil
-import pytesseract
-
+# Функция для работы с OCR.Space API
+def ocr_space_image(image_bytes: bytes, language: str = 'deu') -> str:
+    url = 'https://api.ocr.space/parse/image'  # Адрес API OCR.Space
+    payload = {
+        'language': language,  # Язык распознавания
+        'apikey': 'K84067878888957',  # Твой API ключ
+        'isOverlayRequired': False,  # Не нужно дополнительные данные о наложении
+    }
+    files = {
+        'filename': ('image.jpg', image_bytes),  # Преобразуем изображение в байты
+    }
+    response = requests.post(url, data=payload, files=files)  # Отправляем запрос
+    result = response.json()  # Получаем ответ в формате JSON
+    return result['ParsedResults'][0]['ParsedText'] if 'ParsedResults' in result else ''  # Возвращаем текст с изображения
 # Константы
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
