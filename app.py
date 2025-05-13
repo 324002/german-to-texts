@@ -754,69 +754,9 @@ def main():
                             st.text_area("Распознанный текст", original_text, height=200, label_visibility="collapsed")
                             st.markdown('</div>', unsafe_allow_html=True)
                             
-                            # Отображаем переведенный текст, если он есть
-                            if translated_text:
-                                target_lang_name = TRANSLATION_LANGUAGES.get(target_language, "")
-                                st.markdown(f"### 🌐 Перевод на {target_lang_name}")
-                                st.markdown('<div class="translated-container">', unsafe_allow_html=True)
-                                st.text_area("Переведенный текст", translated_text, height=200, key="translated_text", label_visibility="collapsed")
-                                st.markdown('</div>', unsafe_allow_html=True)
                             
-                            # Анализ текста и статистика
-                            st.markdown("### 📊 Анализ текста")
                             
-                            # Получаем статистику текста
-                            text_stats = analyze_text(original_text)
                             
-                            # Отображаем статистику в красивом виде
-                            col_stats1, col_stats2, col_stats3 = st.columns(3)
-                            
-                            with col_stats1:
-                                st.markdown('<div class="card">', unsafe_allow_html=True)
-                                st.subheader("📝 Базовая статистика")
-                                st.metric("Символов", text_stats["chars_count"])
-                                st.metric("Слов", text_stats["words_count"])
-                                st.metric("Строк", text_stats["lines_count"])
-                                st.metric("Абзацев", text_stats["paragraphs_count"])
-                                st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            with col_stats2:
-                                st.markdown('<div class="card">', unsafe_allow_html=True)
-                                st.subheader("🔤 Состав текста")
-                                st.metric("Букв", text_stats["letters_count"])
-                                st.metric("Цифр", text_stats["digits_count"])
-                                st.metric("Пробелов", text_stats["spaces_count"])
-                                st.metric("Знаков пунктуации", text_stats["punctuation_count"])
-                                st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            with col_stats3:
-                                st.markdown('<div class="card">', unsafe_allow_html=True)
-                                st.subheader("📚 Частотный анализ")
-                                if text_stats["common_words"]:
-                                    for word, count in text_stats["common_words"]:
-                                        st.metric(f'"{word}"', count)
-                                else:
-                                    st.info("Недостаточно данных для анализа")
-                                st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            # Визуализация данных
-                            if text_stats["chars_count"] > 0:
-                                st.markdown("### 📈 Визуализация состава текста")
-                                
-                                # Данные для диаграммы
-                                chart_data = {
-                                    'Категория': ['Буквы', 'Цифры', 'Пробелы', 'Знаки пунктуации'],
-                                    'Количество': [
-                                        text_stats["letters_count"], 
-                                        text_stats["digits_count"], 
-                                        text_stats["spaces_count"], 
-                                        text_stats["punctuation_count"]
-                                    ]
-                                }
-                                chart_df = pd.DataFrame(chart_data)
-                                
-                                # Отображаем диаграмму
-                                st.bar_chart(chart_df.set_index('Категория'))
                             
                             # Кнопки для экспорта
                             st.divider()
