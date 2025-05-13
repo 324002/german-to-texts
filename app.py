@@ -746,7 +746,6 @@ def main():
                             st.success(f"✅ Текст успешно распознан за {processing_time}")
                             
                             # Отображаем распознанный текст
-                            st.markdown(f"### 📄 Распознанный текст ({source_lang_name})")
                             st.markdown('<div class="result-container">', unsafe_allow_html=True)
                             st.text_area("Распознанный текст", original_text, height=200, label_visibility="collapsed")
                             st.markdown('</div>', unsafe_allow_html=True)
