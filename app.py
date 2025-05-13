@@ -717,7 +717,6 @@ def main():
                         # Отображаем результат
                         if success:
                             original_text = result['text']
-                            detected_language = result.get('detected_language', 'auto')
                             
                             # Переводим текст всегда
                             translated_text = None
