@@ -1,39 +1,20 @@
-import io
 import streamlit as st
+import pandas as pd
+import numpy as np
+import io
+import os
+import json
+import time
+import base64
 import requests
 from PIL import Image
-import time
-import json
-import os
-from datetime import datetime
-import base64
-import pandas as pd
-from typing import List, Dict, Tuple
-import concurrent.futures
-# import pdfkit
-from fpdf import FPDF
-import tempfile
 from pathlib import Path
-import hashlib
-from functools import lru_cache
-import shutil
-# Функция для работы с OCR.Space API
-def ocr_space_image(image_bytes: bytes, language: str = 'deu') -> str:
-    url = 'https://api.ocr.space/parse/image'  # Адрес API OCR.Space
-    payload = {
-        'language': language,  # Язык распознавания
-        'apikey': 'K84067878888957',  # Твой API ключ
-        'isOverlayRequired': False,  # Не нужно дополнительные данные о наложении
-    }
-    files = {
-        'filename': ('image.jpg', image_bytes),  # Преобразуем изображение в байты
-    }
-    response = requests.post(url, data=payload, files=files)  # Отправляем запрос
-    result = response.json()  # Получаем ответ в формате JSON
-    return result['ParsedResults'][0]['ParsedText'] if 'ParsedResults' in result else ''  # Возвращаем текст с изображения
+from dotenv import load_dotenv
+
+# Загружаем переменные из .env файла если он существует
+load_dotenv()
+
 # Константы
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
 CACHE_DIR = Path('cache')
 HISTORY_DIR = Path('history')
 STATS_FILE = Path('stats.json')
@@ -44,36 +25,172 @@ HISTORY_DIR.mkdir(exist_ok=True)
 
 # Настройка страницы
 st.set_page_config(
-    page_title="Распознавание текста",
+    page_title="OCR и Перевод текста",
     page_icon="📝",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Инициализация состояния сессии
-if 'history' not in st.session_state:
-    st.session_state.history = []
-if 'batch_results' not in st.session_state:
-    st.session_state.batch_results = []
-if 'edited_texts' not in st.session_state:
-    st.session_state.edited_texts = {}
-if 'comparison_results' not in st.session_state:
-    st.session_state.comparison_results = {}
-if 'export_files' not in st.session_state:
-    st.session_state.export_files = {}
-if 'processing' not in st.session_state:
-    st.session_state.processing = False
-if 'stats' not in st.session_state:
-    st.session_state.stats = {
-        'total_processed': 0,
-        'total_success': 0,
-        'total_failed': 0,
-        'total_size': 0,
-        'last_processed': None
-    }
+# Получение API ключа из переменных окружения или Streamlit secrets
+def get_api_key():
+    # Сначала проверяем переменные окружения
+    api_key = os.getenv("OCR_API_KEY")
+    
+    # Если не найдено в переменных окружения, проверяем Streamlit secrets
+    if not api_key and hasattr(st, "secrets"):
+        api_key = st.secrets.get("OCR_API_KEY")
+    
+    return api_key
+
+# Глобальные переменные
+if 'OCR_API_KEY' not in st.session_state:
+    # Получаем ключ из защищенного источника
+    api_key = get_api_key()
+    if api_key:
+        st.session_state.OCR_API_KEY = api_key
+    else:
+        # Показываем форму для ввода API ключа, если он не найден
+        st.session_state.OCR_API_KEY = None
+
+OCR_SPACE_URL = 'https://api.ocr.space/parse/image'
+
+# Словарь поддерживаемых языков
+SUPPORTED_LANGUAGES = {
+    'en': 'Английский',
+    'ru': 'Русский',
+    'de': 'Немецкий',
+    'fr': 'Французский',
+    'es': 'Испанский',
+    'it': 'Итальянский',
+    'pt': 'Португальский',
+    'nl': 'Нидерландский',
+    'pl': 'Польский',
+    'uk': 'Украинский',
+    'ja': 'Японский',
+    'ko': 'Корейский',
+    'zh': 'Китайский',
+    'ar': 'Арабский'
+}
+
+# Соответствие языков для OCR.space
+OCR_SPACE_LANGUAGES = {
+    'en': 'eng',
+    'ru': 'rus',
+    'de': 'ger',
+    'fr': 'fre',
+    'es': 'spa',
+    'it': 'ita',
+    'pt': 'por',
+    'nl': 'dut',
+    'pl': 'pol',
+    'uk': 'ukr',
+    'ja': 'jpn',
+    'ko': 'kor',
+    'zh': 'chi_sim',
+    'ar': 'ara'
+}
+
+# Функция перевода текста
+def translate_text(text, source_lang='auto', target_lang='en'):
+    try:
+        # Автоматически определяем направление перевода
+        if any(char in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ' for char in text):
+            source_lang = 'ru'
+            target_lang = 'en'
+        else:
+            source_lang = 'en'
+            target_lang = 'ru'
+        
+        # Используем бесплатный API для перевода
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": source_lang,
+            "tl": target_lang,
+            "dt": "t",
+            "q": text
+        }
+        
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            result = response.json()
+            translated_text = ''.join([sentence[0] for sentence in result[0]])
+            return translated_text
+        else:
+            return f"Ошибка перевода: {response.status_code}"
+    except Exception as e:
+        return f"Ошибка перевода: {str(e)}"
+
+# Функция распознавания текста с помощью OCR.space API
+def ocr_space_recognize(image_data, language='auto', enhance_contrast=False, remove_noise=False):
+    try:
+        # Проверяем, что API ключ существует
+        if not st.session_state.OCR_API_KEY:
+            raise Exception("API ключ OCR.space не настроен. Пожалуйста, настройте его в настройках.")
+            
+        # Определяем тип файла
+        file_type = 'png'  # По умолчанию PNG
+        if image_data.startswith(b'\xFF\xD8\xFF'):
+            file_type = 'jpg'
+        elif image_data.startswith(b'%PDF'):
+            file_type = 'pdf'
+        
+        # Кодируем изображение в base64 с правильным префиксом
+        base64_image = f"data:image/{file_type};base64,{base64.b64encode(image_data).decode('utf-8')}"
+        
+        # Автоматическое определение языка (OCR.space будет определять автоматически)
+        ocr_space_lang = 'eng' if language == 'en' else 'auto'
+        
+        payload = {
+            'base64Image': base64_image,
+            'language': ocr_space_lang,
+            'isOverlayRequired': False,
+            'OCREngine': 2,  # 2 - лучший движок
+            'filetype': file_type.upper(),
+            'detectOrientation': True,
+            'scale': True,
+            'isCreateSearchablePdf': False,
+            'isSearchablePdfHideTextLayer': False,
+            'isTable': False
+        }
+        
+        headers = {
+            'apikey': st.session_state.OCR_API_KEY,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        response = requests.post(OCR_SPACE_URL, data=payload, headers=headers, timeout=60)
+        
+        if response.status_code == 401 or response.status_code == 403:
+            # Неверный API ключ
+            st.session_state.OCR_API_KEY = None  # Сбрасываем ключ
+            raise Exception("Неверный API ключ OCR.space. Пожалуйста, проверьте ваш ключ.")
+            
+        elif response.status_code != 200:
+            raise Exception(f"Ошибка API OCR.space: {response.text}")
+            
+        result = response.json()
+        if result.get('IsErroredOnProcessing'):
+            error_msg = result.get('ErrorMessage', 'Неизвестная ошибка OCR')
+            if "Unauthorized request" in error_msg:
+                st.session_state.OCR_API_KEY = None  # Сбрасываем ключ
+                raise Exception("Неверный или просроченный API ключ OCR.space")
+            raise Exception(error_msg)
+            
+        text = result['ParsedResults'][0]['ParsedText']
+        
+        # Пытаемся получить определенный язык, но OCR.space его не возвращает напрямую
+        # Поэтому определяем на основе содержимого текста
+        detected_language = None
+        
+        return text.strip(), detected_language
+        
+    except Exception as e:
+        raise Exception(f"Ошибка при распознавании: {str(e)}")
 
 # Функции для работы с кэшем
-@lru_cache(maxsize=100)
 def get_cache_key(image_data: bytes) -> str:
+    import hashlib
     return hashlib.md5(image_data).hexdigest()
 
 def save_to_cache(image_data: bytes, result: dict):
@@ -92,491 +209,827 @@ def get_from_cache(image_data: bytes) -> dict:
 
 # Функции для работы со статистикой
 def update_stats(success: bool, file_size: int):
-    st.session_state.stats['total_processed'] += 1
-    if success:
-        st.session_state.stats['total_success'] += 1
+    if not STATS_FILE.exists():
+        stats = {
+            'total_processed': 0,
+            'total_success': 0,
+            'total_failed': 0,
+            'total_size': 0,
+            'last_processed': None
+        }
     else:
-        st.session_state.stats['total_failed'] += 1
-    st.session_state.stats['total_size'] += file_size
-    st.session_state.stats['last_processed'] = datetime.now().isoformat()
+        with open(STATS_FILE, 'r', encoding='utf-8') as f:
+            stats = json.load(f)
+    
+    stats['total_processed'] += 1
+    if success:
+        stats['total_success'] += 1
+    else:
+        stats['total_failed'] += 1
+    stats['total_size'] += file_size
+    stats['last_processed'] = time.strftime("%Y-%m-%d %H:%M:%S")
     
     # Сохраняем статистику
     with open(STATS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(st.session_state.stats, f, ensure_ascii=False, indent=2)
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+    
+    return stats
 
 # Функции для проверки безопасности
 def is_allowed_file(filename: str) -> bool:
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'png', 'jpg', 'jpeg', 'pdf'}
 
 def check_file_size(file_data: bytes) -> bool:
-    return len(file_data) <= MAX_FILE_SIZE
+    # Изменяем ограничение с 10 МБ до 1 МБ
+    return len(file_data) <= 1 * 1024 * 1024  # 1MB
 
 def optimize_image(image_data: bytes) -> bytes:
     try:
+        # Проверяем, является ли файл PDF
+        if image_data.startswith(b'%PDF'):
+            # Для PDF просто возвращаем исходные данные
+            return image_data
+            
         img = Image.open(io.BytesIO(image_data))
+        
         # Сжимаем изображение, если оно слишком большое
         if img.size[0] > 2000 or img.size[1] > 2000:
             img.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
+        
+        # Конвертируем RGBA в RGB, если необходимо
+        if img.mode == 'RGBA':
+            # Создаем новое RGB изображение с белым фоном
+            rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+            # Композиция с прозрачностью поверх белого фона
+            rgb_img.paste(img, mask=img.split()[3])  # Используем альфа-канал как маску
+            img = rgb_img
+        elif img.mode != 'RGB':
+            # Конвертируем другие режимы (например, 'P' или 'L') в RGB
+            img = img.convert('RGB')
+            
         # Конвертируем в JPEG для уменьшения размера
         output = io.BytesIO()
         img.save(output, format='JPEG', quality=85)
         return output.getvalue()
     except Exception as e:
         st.error(f"Ошибка при оптимизации изображения: {str(e)}")
+        # Возвращаем исходные данные в случае ошибки
         return image_data
 
-# Функции для пакетной обработки
-def process_batch_images(images: List[Tuple[str, bytes]], settings: Dict) -> List[Dict]:
-    results = []
-    total = len(images)
-    progress_text = "Обработка изображений..."
-    progress_bar = st.progress(0, text=progress_text)
-    
-    # Создаем список для хранения результатов
-    results = [None] * total
-    
-    # Обрабатываем изображения последовательно
-    for i, (filename, image_data) in enumerate(images):
-        try:
-            result = process_single_image(image_data, settings)
-            results[i] = result
-            progress = (i + 1) / total
-            progress_bar.progress(progress, text=f"{progress_text} {int(progress * 100)}%")
-        except Exception as e:
-            results[i] = {'error': str(e)}
-            progress = (i + 1) / total
-            progress_bar.progress(progress, text=f"{progress_text} {int(progress * 100)}%")
-    
-    progress_bar.empty()
-    return results
-
-def process_single_image(image_data: bytes, settings: Dict) -> Dict:
+# Функция для обработки изображения
+def process_image(image_data: bytes, settings: dict) -> dict:
     try:
-        # Проверяем кэш
-        cached_result = get_from_cache(image_data)
-        if cached_result:
-            return cached_result
+        # Проверяем кэш, если включен
+        if settings.get('use_cache', True):
+            cached_result = get_from_cache(image_data)
+            if cached_result:
+                return cached_result
         
-        # Оптимизируем изображение
-        optimized_image = optimize_image(image_data)
+        # Оптимизируем изображение, если включено
+        if settings.get('optimize', True):
+            image_data = optimize_image(image_data)
         
-        # Проверяем размер
-        if not check_file_size(optimized_image):
-            return {'error': 'Файл слишком большой'}
+        # Распознаем текст напрямую через API
+        text, _ = ocr_space_recognize(
+            image_data, 
+            language='auto',  # Автоматическое определение языка
+            enhance_contrast=settings.get('enhance_contrast', False),
+            remove_noise=settings.get('remove_noise', False)
+        )
         
-        files = {'image': optimized_image}
+        # Определяем язык на основе содержимого текста
+        detected_language = 'en'  # По умолчанию английский
         
-        img = Image.open(io.BytesIO(optimized_image))
-        text = ocr_space_image(optimized_image, language='deu')
-        result = {"text": text}
-        save_to_cache(image_data, result)
-        update_stats(True, len(image_data))
-        return result
+        # Если в тексте есть кириллические символы, считаем что язык русский
+        if any(char in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ' for char in text):
+            detected_language = 'ru'
+            
+        # Подсчитываем кириллические и латинские символы для более точного определения
+        cyrillic_chars = sum(1 for char in text if char in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ')
+        latin_chars = sum(1 for char in text if 'a' <= char.lower() <= 'z')
         
-        # if response.status_code == 200:
-        #     result = response.json()
-        #     # Сохраняем в кэш
-        #     save_to_cache(image_data, result)
-        #     update_stats(True, len(image_data))
-        #     return result
-        # else:
-        #     update_stats(False, len(image_data))
-        #     return {'error': f'Ошибка сервера: {response.json().get("error", "Неизвестная ошибка")}'}
-    except Exception as e:
-        update_stats(False, len(image_data))
-        return {'error': str(e)}
-
-# Функции для работы с историей
-def save_to_history(image_data: bytes, text: str, language: str, processing_time: str):
-    try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Сохраняем изображение в отдельный файл
-        image_hash = hashlib.md5(image_data).hexdigest()
-        image_path = HISTORY_DIR / f"{image_hash}.jpg"
-        with open(image_path, 'wb') as f:
-            f.write(image_data)
+        # Если кириллицы больше, чем латиницы - русский язык
+        if cyrillic_chars > latin_chars:
+            detected_language = 'ru'
         
-        history_item = {
-            'timestamp': timestamp,
+        result = {
             'text': text,
-            'language': language,
-            'processing_time': processing_time,
-            'image_path': str(image_path)
+            'processing_time': f'{time.time() - settings.get("start_time", time.time()):.2f} секунд',
+            'language': SUPPORTED_LANGUAGES.get(detected_language, 'Автоопределение'),
+            'detected_language': detected_language
         }
-        
-        st.session_state.history.append(history_item)
-        history_file = HISTORY_DIR / 'history.json'
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(st.session_state.history, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.error(f"Ошибка при сохранении истории: {str(e)}")
-
-def delete_history_item(index: int):
-    try:
-        # Получаем реальный индекс в оригинальной истории
-        original_index = len(st.session_state.history) - index - 1
-        if 0 <= original_index < len(st.session_state.history):
-            # Удаляем файл изображения
-            item = st.session_state.history[original_index]
-            image_path = Path(item['image_path'])
-            if image_path.exists():
-                image_path.unlink()
             
-            # Удаляем запись
-            st.session_state.history.pop(original_index)
+        # Сохраняем в кэш, если включен
+        if settings.get('use_cache', True):
+            save_to_cache(image_data, result)
+                
+        return result
+    except Exception as e:
+        return {'error': f'Ошибка при обработке: {str(e)}'}
+
+# Функция для сохранения в историю
+def save_to_history(image_data: bytes, text: str, language: str, processing_time: str, translated_text=None, target_lang=None):
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    history_file = HISTORY_DIR / f"{timestamp}.json"
+    
+    # Сохраняем изображение
+    image_file = HISTORY_DIR / f"{timestamp}.jpg"
+    try:
+        if not image_data.startswith(b'%PDF'):
+            img = Image.open(io.BytesIO(image_data))
             
-            # Сохраняем обновленную историю
-            history_file = HISTORY_DIR / 'history.json'
-            with open(history_file, 'w', encoding='utf-8') as f:
-                json.dump(st.session_state.history, f, ensure_ascii=False, indent=2)
-            st.success('Запись успешно удалена')
+            # Конвертируем RGBA в RGB, если необходимо
+            if img.mode == 'RGBA':
+                # Создаем новое RGB изображение с белым фоном
+                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+                # Композиция с прозрачностью поверх белого фона
+                rgb_img.paste(img, mask=img.split()[3])  # Используем альфа-канал как маску
+                img = rgb_img
+            elif img.mode != 'RGB':
+                # Конвертируем другие режимы (например, 'P' или 'L') в RGB
+                img = img.convert('RGB')
+                
+            img.save(image_file, format='JPEG', quality=85)
+        else:
+            # Для PDF сохраняем как есть
+            with open(HISTORY_DIR / f"{timestamp}.pdf", 'wb') as f:
+                f.write(image_data)
     except Exception as e:
-        st.error(f'Ошибка при удалении записи: {str(e)}')
-
-def clear_history():
-    try:
-        # Удаляем все файлы изображений
-        for item in st.session_state.history:
-            image_path = Path(item['image_path'])
-            if image_path.exists():
-                image_path.unlink()
-        
-        # Очищаем историю
-        st.session_state.history = []
-        history_file = HISTORY_DIR / 'history.json'
-        if history_file.exists():
-            history_file.unlink()
-        
-        st.success('История успешно очищена')
-    except Exception as e:
-        st.error(f'Ошибка при очистке истории: {str(e)}')
-
-# Функции для экспорта
-def export_to_txt(text: str, filename: str):
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(text)
-
-def export_to_pdf(text: str, filename: str):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10, text)
-    pdf.output(filename)
-
-# Загрузка истории при старте
-def load_history():
-    try:
-        history_file = HISTORY_DIR / 'history.json'
-        if history_file.exists():
-            with open(history_file, 'r', encoding='utf-8') as f:
-                st.session_state.history = json.load(f)
-    except Exception as e:
-        st.warning(f"Не удалось загрузить историю: {str(e)}")
-        st.session_state.history = []
-
-# Загрузка статистики при старте
-def load_stats():
-    try:
-        if STATS_FILE.exists():
-            with open(STATS_FILE, 'r', encoding='utf-8') as f:
-                st.session_state.stats = json.load(f)
-    except Exception as e:
-        st.warning(f"Не удалось загрузить статистику: {str(e)}")
-
-# Загрузка данных при старте
-load_history()
-load_stats()
-
-# Стилизация
-st.markdown("""
-    <style>
-    .main {
-        background-color: #000000;
-        color: #ffffff;
+        st.error(f"Ошибка при сохранении изображения: {str(e)}")
+    
+    # Сохраняем метаданные
+    history_data = {
+        'timestamp': timestamp,
+        'text': text,
+        'language': language,
+        'processing_time': processing_time
     }
-    .stButton>button {
-        width: 100%;
-        background-color: #4CAF50;
+    
+    # Добавляем информацию о переводе, если он был выполнен
+    if translated_text and target_lang:
+        history_data['translated_text'] = translated_text
+        history_data['target_language'] = target_lang
+    
+    with open(history_file, 'w', encoding='utf-8') as f:
+        json.dump(history_data, f, ensure_ascii=False, indent=2)
+
+# Функция для загрузки истории
+@st.cache_data
+def load_history():
+    history = []
+    for history_file in sorted(HISTORY_DIR.glob('*.json'), reverse=True):
+        try:
+            with open(history_file, 'r', encoding='utf-8') as f:
+                history_data = json.load(f)
+                
+                # Проверяем, существует ли соответствующее изображение
+                timestamp = history_data.get('timestamp', '')
+                image_file = HISTORY_DIR / f"{timestamp}.jpg"
+                pdf_file = HISTORY_DIR / f"{timestamp}.pdf"
+                
+                if image_file.exists():
+                    history_data['image_path'] = str(image_file)
+                elif pdf_file.exists():
+                    history_data['pdf_path'] = str(pdf_file)
+                
+                history.append(history_data)
+        except Exception as e:
+            st.error(f"Ошибка при загрузке истории: {str(e)}")
+    return history
+
+# Функция для загрузки статистики
+@st.cache_data
+def load_stats():
+    if STATS_FILE.exists():
+        with open(STATS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {
+        'total_processed': 0,
+        'total_success': 0,
+        'total_failed': 0,
+        'total_size': 0,
+        'last_processed': None
+    }
+
+# Словарь языков для перевода
+TRANSLATION_LANGUAGES = {
+    'en': 'Английский',
+    'ru': 'Русский',
+    'de': 'Немецкий',
+    'fr': 'Французский',
+    'es': 'Испанский',
+    'it': 'Итальянский',
+    'zh': 'Китайский',
+    'ja': 'Японский',
+    'ko': 'Корейский',
+    'ar': 'Арабский'
+}
+
+# Функция для экспорта текста в TXT
+def export_to_txt(text: str) -> str:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    export_file = f"export_{timestamp}.txt"
+    
+    with open(export_file, 'w', encoding='utf-8') as f:
+        f.write(text)
+    
+    return export_file
+
+# Функция для применения CSS-стилей
+def apply_custom_css():
+    st.markdown("""
+    <style>
+    /* Основные цвета и стили */
+    :root {
+        --primary-color: #4361ee;
+        --secondary-color: #3f37c9;
+        --accent-color: #4cc9f0;
+        --text-color: #333;
+        --light-bg: #f8f9fa;
+        --dark-bg: #212529;
+        --success-color: #4ade80;
+        --warning-color: #fbbf24;
+        --error-color: #f87171;
+    }
+    
+    /* Стили для заголовков */
+    h1, h2, h3 {
+        color: var(--primary-color);
+        font-weight: 600;
+    }
+    
+    h1 {
+        border-bottom: 2px solid var(--primary-color);
+        padding-bottom: 0.5rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    /* Стили для контейнеров */
+    .result-container {
+        background-color: var(--light-bg);
+        padding: 1.2rem;
+        border-radius: 8px;
+        border-left: 4px solid var(--primary-color);
+        margin-top: 1.5rem;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    
+    .translated-container {
+        background-color: #e6f3ff;
+        padding: 1.2rem;
+        border-radius: 8px;
+        border-left: 4px solid var(--accent-color);
+        margin-top: 1rem;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    
+    /* Улучшение отзывчивости textarea */
+    .stTextArea textarea {
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font-size: 1rem;
+    }
+    
+    /* Стили для предпросмотра изображений */
+    .preview-container {
+        padding: 1rem;
+        border: 1px dashed #ccc;
+        border-radius: 8px;
+        text-align: center;
+    }
+    
+    .preview-image {
+        max-height: 300px;
+        width: auto;
+        margin: 0 auto;
+        border-radius: 6px;
+    }
+    
+    /* Улучшение стилей боковой панели */
+    .css-1l4w6pd {
+        background-color: #f8f9fa;
+    }
+    
+    /* Улучшенные стили кнопок */
+    .stButton button {
+        border-radius: 6px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+    
+    .stButton button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    /* Стили для уведомлений */
+    div[data-testid="stNotification"] {
+        border-radius: 8px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    
+    /* Стили для индикатора загрузки */
+    .stSpinner svg {
+        animation: spin 1s linear infinite;
+    }
+    
+    /* Отменяем анимацию для текста в сообщении загрузки */
+    .stSpinner p, .stSpinner span, .stSpinner div:not([role="progressbar"]) {
+        animation: none !important;
+        transform: none !important;
+    }
+    
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* Стили для вкладок */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 4px 4px 0 0;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: var(--primary-color);
         color: white;
-        padding: 10px 20px;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
+    }
+    
+    /* Улучшение внешнего вида карточек */
+    .card {
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+        margin-bottom: 1rem;
         transition: all 0.3s ease;
     }
-    .stButton>button:hover {
-        background-color: #45a049;
-        transform: scale(1.02);
-    }
-    .stTextInput>div>div>input {
-        color: #ffffff;
-        background-color: #1a1a1a;
-        border: 1px solid #333;
-    }
-    .stSelectbox>div>div>select {
-        color: #ffffff;
-        background-color: #1a1a1a;
-        border: 1px solid #333;
-    }
-    .stTextArea>div>div>textarea {
-        color: #ffffff;
-        background-color: #1a1a1a;
-        border: 1px solid #333;
-        font-family: monospace;
-        font-size: 16px;
-        line-height: 1.5;
-    }
-    .stMarkdown {
-        color: #ffffff;
-    }
-    .stSubheader {
-        color: #ffffff;
-    }
-    .stTitle {
-        color: #ffffff;
-    }
-    .css-1d391kg {
-        background-color: #1a1a1a;
-    }
-    .css-1y4p8pa {
-        background-color: #1a1a1a;
-    }
-    .css-1v0mbdj {
-        background-color: #1a1a1a;
-    }
-    .success {
-        color: #4CAF50;
-    }
-    .error {
-        color: #f44336;
-    }
-    .preview-image {
-        max-width: 300px;
-        max-height: 200px;
-        object-fit: contain;
-    }
-    .history-item {
-        background-color: #1a1a1a;
-        padding: 10px;
-        margin: 5px 0;
-        border-radius: 4px;
-        border: 1px solid #333;
-    }
-    .batch-result {
-        background-color: #1a1a1a;
-        padding: 15px;
-        margin: 10px 0;
-        border-radius: 4px;
-        border: 1px solid #333;
-    }
-    .progress-bar {
-        height: 4px;
-        background-color: #4CAF50;
-        transition: width 0.3s ease;
-    }
-    @keyframes pulse {
-        0% { transform: scale(1); }
-        50% { transform: scale(1.05); }
-        100% { transform: scale(1); }
-    }
-    .pulse {
-        animation: pulse 2s infinite;
+    
+    .card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.1);
     }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-def compare_results(result1: Dict, result2: Dict) -> Dict:
-    try:
-        text1 = result1.get('text', '')
-        text2 = result2.get('text', '')
-        
-        # Разбиваем тексты на слова
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        # Находим общие и различные слова
-        common_words = words1.intersection(words2)
-        unique_words1 = words1 - words2
-        unique_words2 = words2 - words1
-        
+# Функция для анализа текста и получения статистики
+def analyze_text(text: str) -> dict:
+    if not text:
         return {
-            'similarity': len(common_words) / max(len(words1), len(words2)) if words1 or words2 else 0,
-            'common_words': list(common_words),
-            'unique_words1': list(unique_words1),
-            'unique_words2': list(unique_words2)
+            "chars_count": 0,
+            "words_count": 0,
+            "lines_count": 0,
+            "paragraphs_count": 0,
+            "letters_count": 0,
+            "digits_count": 0,
+            "spaces_count": 0,
+            "punctuation_count": 0,
+            "common_words": []
         }
-    except Exception as e:
-        return {'error': str(e)}
-
-def load_image():
-    uploaded_files = st.file_uploader(
-        label='Выберите изображения для распознавания',
-        type=['jpg', 'jpeg', 'png'],
-        accept_multiple_files=True,
-        help='Поддерживаются форматы JPG, JPEG и PNG'
-    )
-    if uploaded_files:
-        images = []
-        for file in uploaded_files:
-            image_data = file.getvalue()
-            st.image(image_data, caption=file.name, width=200)
-            images.append((file, image_data))
-        return images
-    return None
-
-# Настройки
-with st.sidebar:
-    st.header('⚙️ Настройки')
     
-    # Качество распознавания
-    quality = st.select_slider(
-        'Качество распознавания',
-        options=['Низкое', 'Среднее', 'Высокое'],
-        value='Среднее'
-    )
+    import re
+    import string
+    from collections import Counter
     
-    # Дополнительные настройки
-    with st.expander('Дополнительные настройки'):
-        # Оптимизация изображений
-        optimize = st.checkbox('Оптимизировать изображения', value=True)
-        
-        # Кэширование
-        use_cache = st.checkbox('Использовать кэш', value=True)
-        
-        # Параллельная обработка
-        parallel = st.checkbox('Параллельная обработка', value=True)
-        
-        # Максимальный размер файла
-        max_size = st.number_input(
-            'Максимальный размер файла (МБ)',
-            min_value=1,
-            max_value=50,
-            value=10
-        )
+    # Общее количество символов
+    chars_count = len(text)
     
-    # Статистика
-    st.header('📊 Статистика')
-    if st.session_state.stats['total_processed'] > 0:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric('Всего обработано', st.session_state.stats['total_processed'])
-            st.metric('Успешно', st.session_state.stats['total_success'])
-        with col2:
-            st.metric('Ошибок', st.session_state.stats['total_failed'])
-            st.metric('Общий размер', f"{st.session_state.stats['total_size'] / 1024 / 1024:.1f} МБ")
+    # Количество строк
+    lines = text.split('\n')
+    lines_count = len(lines)
+    
+    # Количество абзацев (непустые строки после пустой строки)
+    paragraphs = [p for p in re.split(r'\n\s*\n', text) if p.strip()]
+    paragraphs_count = len(paragraphs)
+    
+    # Количество слов
+    words = re.findall(r'\b\w+\b', text.lower())
+    words_count = len(words)
+    
+    # Подсчет букв, цифр, пробелов и знаков пунктуации
+    letters_count = sum(c.isalpha() for c in text)
+    digits_count = sum(c.isdigit() for c in text)
+    spaces_count = sum(c.isspace() for c in text)
+    punctuation_count = sum(c in string.punctuation for c in text)
+    
+    # Наиболее распространенные слова (исключая стоп-слова)
+    stop_words = set(['и', 'в', 'на', 'с', 'по', 'для', 'не', 'от', 'за', 'к', 'а', 'the', 'and', 'of', 'to', 'in', 'a', 'is', 'that', 'for', 'on', 'with', 'by', 'at', 'as'])
+    filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
+    word_counts = Counter(filtered_words)
+    common_words = word_counts.most_common(5)  # 5 самых распространенных слов
+    
+    return {
+        "chars_count": chars_count,
+        "words_count": words_count,
+        "lines_count": lines_count,
+        "paragraphs_count": paragraphs_count,
+        "letters_count": letters_count,
+        "digits_count": digits_count,
+        "spaces_count": spaces_count,
+        "punctuation_count": punctuation_count,
+        "common_words": common_words
+    }
+
+# Основной интерфейс приложения
+def main():
+    # Применяем CSS-стили
+    apply_custom_css()
+    
+    # Проверяем наличие API ключа
+    if st.session_state.OCR_API_KEY is None:
+        st.title("📝 OCR Распознавание и Перевод текста")
         
-        if st.session_state.stats['last_processed']:
-            last_time = datetime.fromisoformat(st.session_state.stats['last_processed'])
-            st.caption(f'Последняя обработка: {last_time.strftime("%Y-%m-%d %H:%M:%S")}')
-
-# Основной контент
-st.title('📝 Распознавание текста на изображениях')
-
-# Загрузка изображений
-uploaded_files = st.file_uploader(
-    'Загрузите изображения',
-    type=['png', 'jpg', 'jpeg', 'pdf'],
-    accept_multiple_files=True
-)
-
-if uploaded_files:
-    # Проверяем размер файлов
-    total_size = sum(len(file.getvalue()) for file in uploaded_files)
-    if total_size > max_size * 1024 * 1024:
-        st.error(f'Общий размер файлов превышает {max_size} МБ')
-    else:
-        # Подготавливаем изображения
-        images = []
-        for file in uploaded_files:
-            if is_allowed_file(file.name):
-                image_data = file.getvalue()
-                if check_file_size(image_data):
-                    images.append((file.name, image_data))
-                else:
-                    st.warning(f'Файл {file.name} слишком большой и будет пропущен')
-            else:
-                st.warning(f'Неподдерживаемый формат файла: {file.name}')
+        st.error("⚠️ API ключ для OCR.space не найден. Пожалуйста, настройте его для работы приложения.")
         
-        if images:
-            # Настройки распознавания
-            settings = {
-                'quality': quality,
-                'optimize': optimize,
-                'use_cache': use_cache,
-                'parallel': parallel
-            }
+        with st.form("api_key_form"):
+            st.write("### Введите API ключ OCR.space")
+            api_key = st.text_input("API ключ", type="password", 
+                                    placeholder="Введите ваш ключ API...",
+                                    help="Ключ можно получить бесплатно на сайте OCR.space")
+            submitted = st.form_submit_button("Сохранить", use_container_width=True)
             
-            # Кнопка распознавания
-            if st.button('Распознать текст'):
-                st.session_state.processing = True
-                try:
-                    results = process_batch_images(images, settings)
-                    
-                    # Отображаем результаты
-                    for i, (result, (filename, _)) in enumerate(zip(results, images)):
-                        with st.expander(f'Результат для {filename}'):
-                            if 'error' in result:
-                                st.error(f'Ошибка: {result["error"]}')
-                            else:
-                                # Изображение
-                                st.image(images[i][1], caption=filename, width=300)
-                                
-                                # Текст
-                                text = result.get('text', '')
-                                edited_text = st.text_area(
-                                    'Распознанный текст',
-                                    value=text,
-                                    height=300,
-                                    key=f'text_{i}'
-                                )
-                                
-                                # Сохраняем в историю
-                                if text != edited_text:
-                                    st.session_state.edited_texts[i] = edited_text
-                                save_to_history(
-                                    images[i][1],
-                                    edited_text,
-                                    'ru',
-                                    result.get('processing_time', '')
-                                )
-                except Exception as e:
-                    st.error(f'Ошибка при обработке: {str(e)}')
-                finally:
-                    st.session_state.processing = False
-
-# История
-if st.session_state.history:
-    st.header('📋 История распознавания')
+            if submitted and api_key:
+                st.session_state.OCR_API_KEY = api_key
+                st.success("✅ API ключ успешно сохранен в текущей сессии!")
+                time.sleep(1)  # Небольшая задержка для отображения сообщения
+                st.rerun()
+        
+        st.markdown("""
+        <div class="card">
+            <h3>📋 Как настроить API ключ</h3>
+            <ol>
+                <li><b>Через .env файл</b>:
+                    <ul>
+                        <li>Создайте файл <code>.env</code> в корневой директории проекта</li>
+                        <li>Добавьте строку: <code>OCR_API_KEY=ваш_ключ_api</code></li>
+                    </ul>
+                </li>
+                <br>
+                <li><b>Через Streamlit Secrets</b> (рекомендуется для деплоя):
+                    <ul>
+                        <li>Создайте файл <code>.streamlit/secrets.toml</code></li>
+                        <li>Добавьте строку: <code>OCR_API_KEY="ваш_ключ_api"</code></li>
+                    </ul>
+                </li>
+            </ol>
+            <p>Получить API ключ можно на сайте <a href="https://ocr.space/ocrapi" target="_blank">OCR.space</a> (бесплатно)</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        return  # Прерываем выполнение, пока не будет ключа
     
-    # Фильтры
-    col1, col2 = st.columns(2)
+    # Заголовок приложения
+    st.title("📝 OCR Распознавание и Перевод текста")
+    st.markdown("Загрузите изображение или PDF файл для извлечения и перевода текста.")
+    
+    # Боковая панель
+    with st.sidebar:
+        st.header("⚙️ Настройки")
+        
+        # Автоматическое определение языка
+        st.subheader("🔤 Распознавание")
+        st.info("Язык текста определяется автоматически")
+        
+        # Расширенные настройки
+        with st.expander("🛠️ Расширенные настройки"):
+            optimize = st.checkbox("✅ Оптимизировать изображение", value=True, 
+                                  help="Автоматически оптимизирует размер и качество изображения")
+            use_cache = st.checkbox("📦 Использовать кэш", value=True,
+                                   help="Сохраняет результаты распознавания для повторного использования")
+            
+            # Дополнительные опции
+            enhance_contrast = st.checkbox("🔎 Улучшить контрастность", value=False,
+                                         help="Может помочь при распознавании низкоконтрастных изображений")
+            remove_noise = st.checkbox("🧹 Удалить шум", value=False,
+                                     help="Может улучшить распознавание зашумленных изображений")
+        
+        # Информация о статистике
+        st.divider()
+        st.subheader("📊 Статистика")
+        stats = load_stats()
+        
+        col1, col2 = st.columns(2)
+        col1.metric("Всего обработано", stats['total_processed'])
+        col2.metric("Успешно", stats['total_success'])
+        
+        col1, col2 = st.columns(2)
+        col1.metric("Ошибок", stats['total_failed'])
+        col2.metric("Размер (МБ)", round(stats['total_size'] / (1024 * 1024), 2))
+        
+        if stats['last_processed']:
+            st.caption(f"Последняя обработка: {stats['last_processed']}")
+    
+    # Основная область
+    tab1, tab2 = st.tabs(["📸 Распознавание", "📜 История"])
+    
+    # Вкладка распознавания
+    with tab1:
+        # Колонки для разделения загрузки и предпросмотра
+        col_upload, col_preview = st.columns([2, 1])
+        
+        with col_upload:
+            # Загрузка файла
+            uploaded_file = st.file_uploader("Выберите изображение или PDF файл", 
+                                        type=['png', 'jpg', 'jpeg', 'pdf'],
+                                        help="Поддерживаются форматы PNG, JPG и PDF",
+                                        label_visibility="collapsed",
+                                        accept_multiple_files=False)
+            
+            # Информация о лимите размера файла
+            st.caption("Лимит 1МБ на файл • PNG, JPG, JPEG, PDF")
+            
+            if uploaded_file is not None:
+                # Проверяем размер файла
+                file_data = uploaded_file.getvalue()
+                if not check_file_size(file_data):
+                    st.error("⚠️ Файл слишком большой. Максимальный размер - 1 МБ.")
+                elif st.button("🔍 Распознать текст", type="primary", use_container_width=True):
+                    with st.spinner("⏳ Обработка изображения..."):
+                        start_time = time.time()
+                        
+                        # Настройки для распознавания
+                        settings = {
+                            'language': 'en',
+                            'optimize': optimize,
+                            'use_cache': use_cache,
+                            'enhance_contrast': enhance_contrast,
+                            'remove_noise': remove_noise,
+                            'start_time': start_time  # Запоминаем время начала обработки
+                        }
+                        
+                        # Обработка изображения
+                        result = process_image(file_data, settings)
+                        
+                        # Время обработки
+                        processing_time = f"{time.time() - start_time:.2f} сек."
+                        
+                        # Обновляем статистику
+                        success = 'error' not in result
+                        update_stats(success, len(file_data))
+                        
+                        # Отображаем результат
+                        if success:
+                            original_text = result['text']
+                            detected_language = result.get('detected_language', 'auto')
+                            
+                            # Переводим текст всегда
+                            translated_text = None
+                            target_language = None
+                            
+                            with st.spinner("🌐 Перевод текста..."):
+                                # Если в тексте есть кириллица - переводим на английский, иначе на русский
+                                if any(char in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ' for char in original_text):
+                                    source_lang = 'ru'
+                                    target_language = 'en'
+                                else:
+                                    source_lang = 'en'
+                                    target_language = 'ru'
+                                
+                                if original_text.strip():
+                                    translated_text = translate_text(original_text, source_lang, target_language)
+                            
+                            # Сохраняем в историю
+                            save_to_history(
+                                file_data, 
+                                original_text, 
+                                detected_language, 
+                                processing_time,
+                                translated_text,
+                                target_language
+                            )
+                            
+                            st.success(f"✅ Текст успешно распознан за {processing_time}")
+                            
+                            # Отображаем распознанный текст
+                            source_lang_name = SUPPORTED_LANGUAGES.get(detected_language, "Автоопределенный")
+                            st.markdown(f"### 📄 Распознанный текст ({source_lang_name})")
+                            st.markdown('<div class="result-container">', unsafe_allow_html=True)
+                            st.text_area("Распознанный текст", original_text, height=200, label_visibility="collapsed")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Отображаем переведенный текст, если он есть
+                            if translated_text:
+                                target_lang_name = TRANSLATION_LANGUAGES.get(target_language, "")
+                                st.markdown(f"### 🌐 Перевод на {target_lang_name}")
+                                st.markdown('<div class="translated-container">', unsafe_allow_html=True)
+                                st.text_area("Переведенный текст", translated_text, height=200, key="translated_text", label_visibility="collapsed")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Анализ текста и статистика
+                            st.markdown("### 📊 Анализ текста")
+                            
+                            # Получаем статистику текста
+                            text_stats = analyze_text(original_text)
+                            
+                            # Отображаем статистику в красивом виде
+                            col_stats1, col_stats2, col_stats3 = st.columns(3)
+                            
+                            with col_stats1:
+                                st.markdown('<div class="card">', unsafe_allow_html=True)
+                                st.subheader("📝 Базовая статистика")
+                                st.metric("Символов", text_stats["chars_count"])
+                                st.metric("Слов", text_stats["words_count"])
+                                st.metric("Строк", text_stats["lines_count"])
+                                st.metric("Абзацев", text_stats["paragraphs_count"])
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            with col_stats2:
+                                st.markdown('<div class="card">', unsafe_allow_html=True)
+                                st.subheader("🔤 Состав текста")
+                                st.metric("Букв", text_stats["letters_count"])
+                                st.metric("Цифр", text_stats["digits_count"])
+                                st.metric("Пробелов", text_stats["spaces_count"])
+                                st.metric("Знаков пунктуации", text_stats["punctuation_count"])
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            with col_stats3:
+                                st.markdown('<div class="card">', unsafe_allow_html=True)
+                                st.subheader("📚 Частотный анализ")
+                                if text_stats["common_words"]:
+                                    for word, count in text_stats["common_words"]:
+                                        st.metric(f'"{word}"', count)
+                                else:
+                                    st.info("Недостаточно данных для анализа")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Визуализация данных
+                            if text_stats["chars_count"] > 0:
+                                st.markdown("### 📈 Визуализация состава текста")
+                                
+                                # Данные для диаграммы
+                                chart_data = {
+                                    'Категория': ['Буквы', 'Цифры', 'Пробелы', 'Знаки пунктуации'],
+                                    'Количество': [
+                                        text_stats["letters_count"], 
+                                        text_stats["digits_count"], 
+                                        text_stats["spaces_count"], 
+                                        text_stats["punctuation_count"]
+                                    ]
+                                }
+                                chart_df = pd.DataFrame(chart_data)
+                                
+                                # Отображаем диаграмму
+                                st.bar_chart(chart_df.set_index('Категория'))
+                            
+                            # Кнопки для экспорта
+                            st.divider()
+                            col1, col2 = st.columns(2)
+                            
+                            # Экспорт в TXT
+                            if col1.button("📄 Экспорт в TXT", use_container_width=True):
+                                # Если есть перевод, включаем оба текста
+                                export_content = original_text
+                                if translated_text:
+                                    export_content += f"\n\nПЕРЕВОД:\n{translated_text}"
+                                    
+                                export_file = export_to_txt(export_content)
+                                with open(export_file, "rb") as file:
+                                    col1.download_button(
+                                        label="⬇️ Скачать TXT",
+                                        data=file,
+                                        file_name=export_file,
+                                        mime="text/plain",
+                                        use_container_width=True
+                                    )
+                            
+                            # Копировать в буфер обмена
+                            if col2.button("📋 Копировать текст", use_container_width=True):
+                                st.toast("📋 Текст скопирован в буфер обмена!")
+                        else:
+                            st.error(f"❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}")
+        
+        # Предпросмотр изображения
+        with col_preview:
+            if uploaded_file is not None:
+                if uploaded_file.type.startswith('image/'):
+                    st.markdown("### 🖼️ Предпросмотр")
+                    st.markdown('<div class="preview-container">', unsafe_allow_html=True)
+                    st.image(file_data, caption=uploaded_file.name, use_container_width=True, output_format="JPEG")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                elif uploaded_file.type == 'application/pdf':
+                    st.info("📑 Загружен PDF-файл. Предпросмотр недоступен.")
+                    st.markdown(f"**Имя файла:** {uploaded_file.name}")
+                    st.markdown(f"**Размер:** {round(len(file_data) / 1024, 2)} КБ")
+    
+    # Вкладка истории
+    with tab2:
+        st.subheader("📜 История распознавания")
+        
+        # Кнопка обновления истории
+        if st.button("🔄 Обновить историю", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+        
+        # Загружаем историю
+        history = load_history()
+        
+        if not history:
+            st.info("📭 История пуста. Распознайте текст, чтобы увидеть историю.")
+        else:
+            # Отображаем историю в виде карточек
+            for i, item in enumerate(history):
+                with st.expander(f"📝 **{item.get('timestamp', 'Неизвестно')}** | {item.get('language', 'Неизвестно')}"):
+                    display_translation_result(item, i)
+
+# Функция для отображения истории перевода
+def display_translation_result(item, i):
+    col1, col2 = st.columns([3, 1])
+    
     with col1:
-        date_filter = st.date_input('Фильтр по дате')
-    with col2:
-        if st.button('Очистить историю'):
-            clear_history()
-            st.experimental_rerun()
+        st.markdown("#### 📄 Распознанный текст")
+        st.markdown('<div class="result-container">', unsafe_allow_html=True)
+        st.text_area("Оригинальный текст", item.get('text', ''), height=150, key=f"hist_text_{i}", label_visibility="collapsed")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Отображаем переведенный текст, если он есть
+        if 'translated_text' in item:
+            target_lang = item.get('target_language', '')
+            target_lang_name = TRANSLATION_LANGUAGES.get(target_lang, target_lang)
+            st.markdown(f"#### 🌐 Перевод на {target_lang_name}")
+            st.markdown('<div class="translated-container">', unsafe_allow_html=True)
+            st.text_area("Переведенный текст", item.get('translated_text', ''), height=150, key=f"hist_trans_{i}", label_visibility="collapsed")
+            st.markdown('</div>', unsafe_allow_html=True)
     
-    # Отображаем историю
-    for i, item in enumerate(reversed(st.session_state.history)):
-        item_date = datetime.strptime(item['timestamp'], "%Y-%m-%d %H:%M:%S").date()
-        if date_filter is None or item_date == date_filter:
-            with st.expander(f'Запись от {item["timestamp"]}'):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    image_path = Path(item['image_path'])
-                    if image_path.exists():
-                        st.image(str(image_path), width=300)
-                    else:
-                        st.warning('Изображение не найдено')
-                with col2:
-                    if st.button('🗑️ Удалить', key=f'delete_{i}'):
-                        delete_history_item(i)
-                        st.experimental_rerun()
+    with col2:
+        st.caption(f"⏱️ Время обработки: {item.get('processing_time', 'Неизвестно')}")
+        st.caption(f"🔤 Язык: {item.get('language', 'Неизвестно')}")
+        
+        # Если есть изображение, показываем его
+        if 'image_path' in item:
+            try:
+                with open(item['image_path'], 'rb') as img_file:
+                    st.image(img_file.read(), caption="Изображение", use_container_width=True, output_format="JPEG")
+            except Exception:
+                st.warning("Изображение недоступно")
+        elif 'pdf_path' in item:
+            st.info("PDF файл")
+            
+        # Кнопки для экспорта и анализа текста
+        col_btn1, col_btn2 = st.columns(2)
+        
+        # Кнопка для экспорта
+        if col_btn1.button("📄 Экспорт", key=f"export_btn_{i}", use_container_width=True):
+            export_content = item.get('text', '')
+            if 'translated_text' in item:
+                export_content += f"\n\nПЕРЕВОД:\n{item.get('translated_text', '')}"
                 
-                st.text_area('Текст', value=item['text'], height=300, key=f'history_text_{i}')
-                st.caption(f'Время обработки: {item["processing_time"]}')
+            export_file = export_to_txt(export_content)
+            with open(export_file, "rb") as file:
+                col_btn1.download_button(
+                    label="⬇️ Скачать TXT",
+                    data=file,
+                    file_name=export_file,
+                    mime="text/plain",
+                    key=f"download_btn_{i}",
+                    use_container_width=True
+                )
+        
+        # Кнопка для анализа текста
+        show_stats_key = f"show_stats_{i}"
+        if show_stats_key not in st.session_state:
+            st.session_state[show_stats_key] = False
+            
+        if col_btn2.button("📊 Статистика", key=f"stats_btn_{i}", use_container_width=True):
+            st.session_state[show_stats_key] = not st.session_state[show_stats_key]
+    
+    # Отображаем статистику под колонками, если активировано
+    if show_stats_key in st.session_state and st.session_state[show_stats_key]:
+        text = item.get('text', '')
+        st.markdown("---")
+        st.markdown("### 📊 Статистика текста")
+        # Получаем статистику текста
+        text_stats = analyze_text(text)
+        
+        cols_stat = st.columns(3)
+        with cols_stat[0]:
+            st.markdown("##### 📝 Базовая статистика")
+            st.markdown(f"""
+            * **Символов:** {text_stats["chars_count"]}
+            * **Слов:** {text_stats["words_count"]}
+            * **Строк:** {text_stats["lines_count"]}
+            * **Абзацев:** {text_stats["paragraphs_count"]}
+            """)
+        
+        with cols_stat[1]:
+            st.markdown("##### 🔤 Состав текста")
+            st.markdown(f"""
+            * **Букв:** {text_stats["letters_count"]}
+            * **Цифр:** {text_stats["digits_count"]}
+            * **Пробелов:** {text_stats["spaces_count"]}
+            * **Знаков пунктуации:** {text_stats["punctuation_count"]}
+            """)
+        
+        with cols_stat[2]:
+            st.markdown("##### 📚 Частые слова")
+            if text_stats["common_words"]:
+                for word, count in text_stats["common_words"]:
+                    st.markdown(f"* **{word}**: {count}")
+            else:
+                st.info("Недостаточно данных для анализа")
 
-# Футер
-st.markdown('---')
-st.markdown('*Приложение для распознавания текста на изображениях*') 
+if __name__ == "__main__":
+    main() 
