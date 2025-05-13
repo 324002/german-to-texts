@@ -575,63 +575,6 @@ def apply_custom_css():
     }
     </style>
     """, unsafe_allow_html=True)
-
-# Функция для анализа текста и получения статистики
-def analyze_text(text: str) -> dict:
-    if not text:
-        return {
-            "chars_count": 0,
-            "words_count": 0,
-            "lines_count": 0,
-            "paragraphs_count": 0,
-            "letters_count": 0,
-            "digits_count": 0,
-            "spaces_count": 0,
-            "punctuation_count": 0,
-            "common_words": []
-        }
-    
-    import re
-    import string
-    from collections import Counter
-    
-    # Общее количество символов
-    chars_count = len(text)
-    
-    # Количество строк
-    lines = text.split('\n')
-    lines_count = len(lines)
-    
-    # Количество абзацев (непустые строки после пустой строки)
-    paragraphs = [p for p in re.split(r'\n\s*\n', text) if p.strip()]
-    paragraphs_count = len(paragraphs)
-    
-    # Количество слов
-    words = re.findall(r'\b\w+\b', text.lower())
-    words_count = len(words)
-    
-    # Подсчет букв, цифр, пробелов и знаков пунктуации
-    letters_count = sum(c.isalpha() for c in text)
-    digits_count = sum(c.isdigit() for c in text)
-    spaces_count = sum(c.isspace() for c in text)
-    punctuation_count = sum(c in string.punctuation for c in text)
-    
-    # Наиболее распространенные слова (исключая стоп-слова)
-    stop_words = set(['и', 'в', 'на', 'с', 'по', 'для', 'не', 'от', 'за', 'к', 'а', 'the', 'and', 'of', 'to', 'in', 'a', 'is', 'that', 'for', 'on', 'with', 'by', 'at', 'as'])
-    filtered_words = [word for word in words if word not in stop_words and len(word) > 2]
-    word_counts = Counter(filtered_words)
-    common_words = word_counts.most_common(5)  # 5 самых распространенных слов
-    
-    return {
-        "chars_count": chars_count,
-        "words_count": words_count,
-        "lines_count": lines_count,
-        "paragraphs_count": paragraphs_count,
-        "letters_count": letters_count,
-        "digits_count": digits_count,
-        "spaces_count": spaces_count,
-        "punctuation_count": punctuation_count,
-        "common_words": common_words
     }
 
 # Основной интерфейс приложения
