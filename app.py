@@ -738,7 +738,6 @@ def main():
                             save_to_history(
                                 file_data, 
                                 original_text, 
-                                detected_language, 
                                 processing_time,
                                 translated_text,
                                 target_language
