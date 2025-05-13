@@ -888,14 +888,6 @@ def display_translation_result(item, i):
         st.text_area("Оригинальный текст", item.get('text', ''), height=150, key=f"hist_text_{i}", label_visibility="collapsed")
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Отображаем переведенный текст, если он есть
-        if 'translated_text' in item:
-            target_lang = item.get('target_language', '')
-            target_lang_name = TRANSLATION_LANGUAGES.get(target_lang, target_lang)
-            st.markdown(f"#### 🌐 Перевод на {target_lang_name}")
-            st.markdown('<div class="translated-container">', unsafe_allow_html=True)
-            st.text_area("Переведенный текст", item.get('translated_text', ''), height=150, key=f"hist_trans_{i}", label_visibility="collapsed")
-            st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
         st.caption(f"⏱️ Время обработки: {item.get('processing_time', 'Неизвестно')}")
@@ -930,49 +922,7 @@ def display_translation_result(item, i):
                     key=f"download_btn_{i}",
                     use_container_width=True
                 )
-        
-        # Кнопка для анализа текста
-        show_stats_key = f"show_stats_{i}"
-        if show_stats_key not in st.session_state:
-            st.session_state[show_stats_key] = False
-            
-        if col_btn2.button("📊 Статистика", key=f"stats_btn_{i}", use_container_width=True):
-            st.session_state[show_stats_key] = not st.session_state[show_stats_key]
     
-    # Отображаем статистику под колонками, если активировано
-    if show_stats_key in st.session_state and st.session_state[show_stats_key]:
-        text = item.get('text', '')
-        st.markdown("---")
-        st.markdown("### 📊 Статистика текста")
-        # Получаем статистику текста
-        text_stats = analyze_text(text)
-        
-        cols_stat = st.columns(3)
-        with cols_stat[0]:
-            st.markdown("##### 📝 Базовая статистика")
-            st.markdown(f"""
-            * **Символов:** {text_stats["chars_count"]}
-            * **Слов:** {text_stats["words_count"]}
-            * **Строк:** {text_stats["lines_count"]}
-            * **Абзацев:** {text_stats["paragraphs_count"]}
-            """)
-        
-        with cols_stat[1]:
-            st.markdown("##### 🔤 Состав текста")
-            st.markdown(f"""
-            * **Букв:** {text_stats["letters_count"]}
-            * **Цифр:** {text_stats["digits_count"]}
-            * **Пробелов:** {text_stats["spaces_count"]}
-            * **Знаков пунктуации:** {text_stats["punctuation_count"]}
-            """)
-        
-        with cols_stat[2]:
-            st.markdown("##### 📚 Частые слова")
-            if text_stats["common_words"]:
-                for word, count in text_stats["common_words"]:
-                    st.markdown(f"* **{word}**: {count}")
-            else:
-                st.info("Недостаточно данных для анализа")
 
 if __name__ == "__main__":
     main() 
